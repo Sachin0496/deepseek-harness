@@ -176,7 +176,9 @@ describe('dsh web authentication through the real CLI', () => {
       const setCookie = exchange.headers.get('set-cookie')
       if (setCookie === null) throw new Error('real CLI token exchange omitted Set-Cookie')
       expect(setCookie).toContain('HttpOnly')
-      expect(setCookie).toContain('SameSite=Strict')
+      // Lax, not Strict: the launch URL is normally opened from outside the
+      // browser, where a Strict cookie would be withheld from the 303 follow.
+      expect(setCookie).toContain('SameSite=Lax')
       expect(setCookie).not.toContain('Secure')
       const cookie = setCookie.split(';', 1)[0]!
 

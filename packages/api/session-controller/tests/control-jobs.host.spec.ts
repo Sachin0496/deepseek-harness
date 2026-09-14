@@ -101,6 +101,28 @@ describe('Session control jobs baseline', () => {
       startedAt: 0,
     })
   })
+
+  it('projects a non-consuming outputTail without touching the consuming read cursor', async () => {
+    const { ctx, session, agent, control } = await harness(true)
+    let settle!: (outcome: JobOutcome) => void
+    let reads = 0
+    ctx.jobs.start({
+      ...producer('streaming build').spec,
+      owner: agent,
+      run: () => ({
+        cancel: () => {},
+        done: new Promise<JobOutcome>((resolve) => { settle = resolve }),
+        readOutput: () => { reads += 1; return 'stolen output' },
+        peekOutput: () => 'tail bytes',
+      }),
+    })
+    const frame = await baseline(control)
+    const job = frame.value.jobs[session.id]?.[0]
+    expect(job?.outputTail).toBe('tail bytes')
+    // The projection never consumed the owner's own output deltas.
+    expect(reads).toBe(0)
+    settle({ status: 'completed' })
+  })
 })
 
 describe('Session control jobs updates', () => {

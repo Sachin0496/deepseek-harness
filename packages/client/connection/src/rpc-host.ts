@@ -9,7 +9,7 @@ import {
 } from './rpc.ts'
 import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge, type FetchHandler } from './http-bridge.ts'
-import { isTrustedApiRequest } from './api-request-trust.ts'
+import { isTrustedApiRequest, assertTrustedAuthority } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
 import type {
@@ -59,6 +59,7 @@ declare module '@deepseek-ai/cordis' {
 export class HostConnectionService extends Service implements HostConnectionHandle {
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
   private readonly fetchRoutes = new Map<string, RegisteredFetchRoute>()
+  private readonly trustedAuthorities: Set<string>
 
   /**
    * Provide the Host half over the active HTTP server.
@@ -68,10 +69,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
    */
   constructor(
     ctx: Context,
-    private readonly trustedHosts: readonly string[],
+    trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
   ) {
     super(ctx, 'connection')
+    this.trustedAuthorities = new Set(trustedHosts)
   }
 
   /** Generic channel registry scoped to the Context reading this service. */
@@ -94,8 +96,24 @@ export class HostConnectionService extends Service implements HostConnectionHand
 
   /** Apply the configured Host/Origin fence, then browser authentication. */
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
-    if (!isTrustedApiRequest(request, this.trustedHosts)) return 403
+    if (!isTrustedApiRequest(request, [...this.trustedAuthorities])) return 403
     return this.browserAuth.isAuthenticated(request) ? undefined : 401
+  }
+
+  /**
+   * Accept one runtime authority in addition to the static `trustedHosts`.
+   * A tunnel publishes the hostname it assigns only after it connects, so the
+   * fence cannot be composed from config alone; this keeps that authority
+   * inside the same validation and Host/Origin rules as a configured entry.
+   * @param authority - bare `host` or `host:port` authority to accept.
+   * @returns the disposer withdrawing the authority.
+   */
+  addTrustedAuthority(authority: string): () => void {
+    // Same validation as the config boundary: a malformed entry fails here
+    // rather than silently authorizing the hostname it would have parsed to.
+    assertTrustedAuthority(authority)
+    this.trustedAuthorities.add(authority)
+    return () => { this.trustedAuthorities.delete(authority) }
   }
 
   /** Authenticate an index request through the process-token exchange or cookie. */

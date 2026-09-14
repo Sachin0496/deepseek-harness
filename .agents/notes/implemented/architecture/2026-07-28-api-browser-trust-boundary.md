@@ -17,6 +17,8 @@ Enforce browser trust once, at the carrier, for the entire `/api` prefix — two
 
 Reachability is the webserver binding's policy (`host: 127.0.0.1 | 0.0.0.0`), and this fence is a confused-deputy defense rather than identity. Connection applies the separate [browser token authentication](2026-08-24-browser-token-authentication.md) after the fence. The fence does not inspect peer socket addresses: binding expresses reachability, `trustedHosts` names accepted authorities, and the socket address adds nothing the Host/Origin checks need.
 
+A caller that learns an authority only at runtime extends the fence with `HostConnectionService.addTrustedAuthority(authority)`, which returns the disposer withdrawing it. The added entry passes `assertTrustedAuthority` — the same validation the config boundary runs — so a malformed value throws at the call rather than quietly authorizing the hostname it would have parsed to, and added authorities then face the identical Host/Origin and browser-session rules. The runtime set exists because the [Web GUI's remote access](../feature/2026-09-11-web-gui-remote-access.md) publishes the loopback listener through a Cloudflare quick tunnel, whose public hostname is assigned when the tunnel connects and therefore cannot appear in composition config.
+
 ## Alternatives considered
 
 - **Per-RPC guards (status quo extended).** Rejected: the guard list trails the method list forever, the highest-value methods were already unguarded, and a loopback rule on browse RPCs would break the remote deployments they exist for.

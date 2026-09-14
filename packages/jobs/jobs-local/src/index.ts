@@ -27,6 +27,12 @@ export const TASK_WAIT_TIMEOUT = 'TASK_WAIT_TIMEOUT'
 /** Default maximum number of active jobs in one exact-owner bucket. */
 const DEFAULT_MAX_CONCURRENT_TASKS_PER_OWNER = 10
 
+/** Default safety clamp, in characters, for a snapshot's projected output tail. */
+const DEFAULT_OUTPUT_TAIL_MAX_CHARS = 2048
+
+/** Default poll interval, in milliseconds, for re-broadcasting changed live tails. */
+const DEFAULT_TAIL_BROADCAST_MS = 2000
+
 /** Configuration for the process-local job registry. */
 export interface Config {
   /**
@@ -34,6 +40,17 @@ export interface Config {
    * omission defaults to 10.
    */
   maxConcurrentJobsPerOwner?: number
+  /**
+   * Safety clamp, in characters, for {@link JobSnapshot.outputTail}; omission
+   * defaults to 2048. Zero disables tail projection entirely.
+   */
+  outputTailMaxChars?: number
+  /**
+   * Poll interval for re-broadcasting live jobs whose non-consuming tail
+   * changed, in milliseconds; omission defaults to 2000. Zero disables the
+   * poll, so tails refresh only when another lifecycle change fires.
+   */
+  tailBroadcastMs?: number
 }
 
 /** The registry's mutable per-job record (never handed out — see {@link LocalJobRegistry.snapshot}). */
@@ -46,9 +63,12 @@ interface TrackedTask {
   owner: Agent | undefined
   cancel: (reason?: string) => void
   readOutput: (() => string) | undefined
+  peekOutput: (() => string) | undefined
   status: JobStatus
   detail: string | undefined
   output: string | undefined
+  /** Last broadcast tail text, used to detect tail changes between polls. */
+  lastTail: string | undefined
   startedAt: number
   finishedAt: number | undefined
   reported: boolean
@@ -95,10 +115,26 @@ export class LocalJobRegistry extends JobRegistry {
       .min(1)
       .max(Number.MAX_SAFE_INTEGER)
       .default(DEFAULT_MAX_CONCURRENT_TASKS_PER_OWNER),
+    outputTailMaxChars: z.number()
+      .step(1)
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(DEFAULT_OUTPUT_TAIL_MAX_CHARS),
+    tailBroadcastMs: z.number()
+      .step(1)
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(DEFAULT_TAIL_BROADCAST_MS),
   })
 
   /** Schemastery-defaulted active-job limit. */
   private readonly maxConcurrentJobsPerOwner: number
+  /** Schemastery-defaulted output-tail safety clamp. */
+  private readonly outputTailMaxChars: number
+  /** Schemastery-defaulted tail re-broadcast poll interval. */
+  private readonly tailBroadcastMs: number
+  /** Poll timer that re-broadcasts live jobs whose non-consuming tail changed. */
+  private tailTimer: ReturnType<typeof setInterval> | undefined
   private store = new Map<JobId, TrackedTask>()
   private counters = new Map<string, number>()
   /**
@@ -124,6 +160,8 @@ export class LocalJobRegistry extends JobRegistry {
     super(ctx)
     // Schemastery validates and fills the default before constructing the service.
     this.maxConcurrentJobsPerOwner = (config as Required<Config>).maxConcurrentJobsPerOwner
+    this.outputTailMaxChars = (config as Required<Config>).outputTailMaxChars
+    this.tailBroadcastMs = (config as Required<Config>).tailBroadcastMs
     this.selfCtx = ctx
     ctx.effect(() => () => this.disposeAll(), 'jobs teardown')
   }
@@ -162,9 +200,11 @@ export class LocalJobRegistry extends JobRegistry {
       owner: spec.owner,
       cancel: hooks.cancel.bind(hooks),
       readOutput: hooks.readOutput?.bind(hooks),
+      peekOutput: hooks.peekOutput?.bind(hooks),
       status: 'running',
       detail: undefined,
       output: undefined,
+      lastTail: undefined,
       startedAt: Date.now(),
       finishedAt: undefined,
       reported: false,
@@ -186,6 +226,7 @@ export class LocalJobRegistry extends JobRegistry {
     // Registration is complete and cannot fail from here, so the visible set
     // has genuinely changed.
     this.notifyChanged(job.owner)
+    this.ensureTailTimer()
     return id
   }
 
@@ -362,6 +403,7 @@ export class LocalJobRegistry extends JobRegistry {
   /** Project a fresh read-only snapshot from the mutable record. */
   private snapshot(job: TrackedTask): JobSnapshot {
     const ownerSession = job.owner?.id
+    const tail = this.tailOf(job)
     return {
       id: job.id,
       kind: job.kind,
@@ -370,10 +412,61 @@ export class LocalJobRegistry extends JobRegistry {
       ...ownerSession !== undefined ? { ownerSession } : {},
       status: job.status,
       ...job.detail !== undefined ? { detail: job.detail } : {},
+      ...tail !== undefined ? { outputTail: tail } : {},
       startedAt: job.startedAt,
       ...job.finishedAt !== undefined ? { finishedAt: job.finishedAt } : {},
       reported: job.reported,
     }
+  }
+
+  /**
+   * Fresh bounded tail for one job: the producer's non-consuming peek clamped
+   * to `outputTailMaxChars`, or undefined when the producer offers no peek or
+   * projection is disabled. Every call re-peeks, so snapshots are current even
+   * between tail polls; the poll exists only to push changes to observers.
+   */
+  private tailOf(job: TrackedTask): string | undefined {
+    if (this.outputTailMaxChars <= 0 || job.peekOutput === undefined) return undefined
+    return this.clampTail(job.peekOutput())
+  }
+
+  /** Clamp tail text to the configured character bound, keeping the end. */
+  private clampTail(text: string): string {
+    return text.length <= this.outputTailMaxChars ? text : text.slice(-this.outputTailMaxChars)
+  }
+
+  /** Start the tail poll once, while re-broadcasts are enabled and service is live. */
+  private ensureTailTimer(): void {
+    if (this.tailTimer !== undefined || this.tailBroadcastMs <= 0 || this.listenersClosed) return
+    if (![...this.store.values()].some(job => !isTerminal(job.status) && job.peekOutput !== undefined)) return
+    this.tailTimer = setInterval(() => { this.broadcastTailChanges() }, this.tailBroadcastMs)
+    this.tailTimer.unref()
+  }
+
+  /** Stop the tail poll when no live peekable job remains. */
+  private stopTailTimerIfIdle(): void {
+    if (this.tailTimer === undefined) return
+    const live = [...this.store.values()].some(job => !isTerminal(job.status) && job.peekOutput !== undefined)
+    if (!live) {
+      clearInterval(this.tailTimer)
+      this.tailTimer = undefined
+    }
+  }
+
+  /**
+   * Re-broadcast every live peekable job whose tail changed since the last
+   * poll. Peek reads are non-consuming, so polling cannot steal deltas from
+   * the owner's own {@link JobRead} deliveries.
+   */
+  private broadcastTailChanges(): void {
+    for (const job of this.store.values()) {
+      if (isTerminal(job.status) || job.peekOutput === undefined) continue
+      const tail = this.clampTail(job.peekOutput())
+      if (tail === job.lastTail) continue
+      job.lastTail = tail
+      this.notifyChanged(job.owner)
+    }
+    this.stopTailTimerIfIdle()
   }
 
   /**
@@ -482,6 +575,10 @@ export class LocalJobRegistry extends JobRegistry {
     // The flag is the whole guard: each layer entry's undo belongs to the fiber
     // that registered it, so this service may not drop them on its own way out.
     this.listenersClosed = true
+    if (this.tailTimer !== undefined) {
+      clearInterval(this.tailTimer)
+      this.tailTimer = undefined
+    }
     const all = [...this.store.values()]
     this.cancelForTeardown(all, 'jobs service disposed')
     await Promise.all(all.map(job => job.settled))

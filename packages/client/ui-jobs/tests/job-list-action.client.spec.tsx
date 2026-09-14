@@ -59,7 +59,9 @@ function props(jobs: readonly JobView[] | undefined): JobListActionProps {
 function rowCells(): string[][] {
   return within(screen.getByRole('list', { name: zh['list.aria'] }))
     .getAllByRole('listitem')
-    .map(row => [...row.children]
+    // Every row owns one `.rowMain` wrapper (button when expandable, div otherwise);
+    // the readable cells are that wrapper's children.
+    .map(row => [...(row.firstElementChild ?? row).children]
       .map(cell => cell.textContent ?? '')
       .filter(text => text !== ''))
 }
@@ -237,5 +239,33 @@ describe('JobListAction wire tolerance', () => {
     ])} />)
     fireEvent.click(screen.getByRole('button'))
     expect(rowCells().map(cells => cells[1])).toEqual(['later', 'earlier'])
+  })
+})
+
+describe('JobListAction output tail', () => {
+  it('expands a row with an output tail into a readable pre, then collapses it', () => {
+    render(<JobListAction {...props([job({ outputTail: 'line one\nline two' })])} />)
+    fireEvent.click(screen.getByRole('button'))
+    const list = screen.getByRole('list', { name: zh['list.aria'] })
+
+    fireEvent.click(within(list).getByRole('button', { name: zh['row.expand'] }))
+    const tail = screen.getByLabelText(zh['tail.aria'])
+    expect(tail.textContent).toContain('line one')
+    expect(tail.textContent).toContain('line two')
+    expect(tail.textContent).toContain('\n')
+
+    fireEvent.click(within(list).getByRole('button', { name: zh['row.collapse'] }))
+    expect(screen.queryByLabelText(zh['tail.aria'])).toBeNull()
+  })
+
+  it('keeps rows without a tail inert so plain status rows stay read-only', () => {
+    render(<JobListAction {...props([job(), job({ id: 'bash-2' as JobView['id'], outputTail: 'tail' })])} />)
+    fireEvent.click(screen.getByRole('button'))
+    const list = screen.getByRole('list', { name: zh['list.aria'] })
+    // Exactly one expandable row; the plain row exposes no button.
+    expect(within(list).getAllByRole('button', { name: zh['row.expand'] })).toHaveLength(1)
+    const plain = within(list).getAllByRole('listitem')[0]
+    if (plain === undefined) throw new Error('expected the plain row to render')
+    expect(plain.firstElementChild?.tagName).toBe('DIV')
   })
 })

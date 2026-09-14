@@ -126,7 +126,9 @@
     # supplies invocation-only values; after the server binds, this row samples
     # LAN trust once and provides `webRuntime`. A complete agent-preset persona
     # suppresses the prompt section for that agent while retaining the host-owned
-    # shell variable.
+    # shell variable. Under `--remote` this row also publishes the loopback
+    # listener through a quick tunnel and admits the assigned hostname to the
+    # /api Host fence.
     - id: web-runtime
       name: '@deepseek-ai/dsh-web-app'
       inject: [webStartup]
@@ -135,6 +137,9 @@
         printUrl: true
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
+        remote: !!js ctx.webStartup.remote
+        cloudflared: !!js ctx.webStartup.cloudflared
+        printQr: !!js ctx.webStartup.printQr
 
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It

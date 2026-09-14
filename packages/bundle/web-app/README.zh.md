@@ -38,7 +38,7 @@ dsh --profile web --no-open --port 8080
 
 ### 配置
 
-大多数用户不需要设置这些；命令行 flag 会提供给下面四个设置——`--host`、`--port` 与 `--trusted-host` 来自本次调用，`--no-open` 仅对本次调用关闭浏览器交接：
+大多数用户不需要设置这些；命令行 flag 会提供给下面的设置——`--host`、`--port`、`--trusted-host`、`--remote`、`--cloudflared` 与 `--no-qr` 来自本次调用，`--no-open` 仅对本次调用关闭浏览器交接：
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
@@ -46,6 +46,9 @@ dsh --profile web --no-open --port 8080
 | `printUrl` | `true` | 启动时打印 `dsh web:` URL 行 |
 | `surfaceContext` | `true` | 给 agent（智能体）提供 GUI 定位上下文，并把 `DSH_WEB_URL` 暴露给其 shell 命令 |
 | `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
+| `remote` | `false` | 通过 Cloudflare 快速隧道发布回环 GUI |
+| `cloudflared` | `cloudflared` | `remote` 运行的连接器可执行文件 |
+| `printQr` | `true` | 为公网远程 URL 打印二维码 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -53,9 +56,27 @@ dsh --profile web --no-open --port 8080
 
 默认情况下 GUI 只接受本机的连接。绑定所有网络接口的部署也会允许 LAN 内的浏览器访问，此时打印的 URL 会附带一个 LAN 地址；`--trusted-host` 在两种情况下都能添加额外主机。Host 与 Origin 检查控制可达性，token 交换则认证每个 Host API 方法与 WebSocket stream。LAN 地址只在启动时采样一次，因此之后的网络变化不会被感知——重启 GUI 以重新公告。
 
+### 从其他网络访问 GUI
+
+`--remote` 通过 Cloudflare 快速隧道发布回环监听，使蜂窝网络上的手机也能访问会话，而无需 GUI 绑定公网接口，也无需开放端口。隧道连接后，启动输出会多出一行 `dsh web: remote https://<分配的主机>/?token=...`；除非用 `--no-qr` 关闭，还会打印编码该 URL 的二维码。扫码即可打开会话，令牌交换已经完成。
+
+```sh
+dsh --profile web --remote
+```
+
+这两行都只在连接器报出主机名之后经过一小段宽限期才出现，而不是它刚打印时。Cloudflare 会在数秒之后才为全新的快速隧道主机名创建边缘记录，在这个窗口内显示的二维码扫出来是浏览器的 DNS 失败（`DNS address could not be found`），而不是会话。这段等待刻意用计时器而非可达性探测：`trycloudflare.com` 的否定 TTL 为 1800 秒，因此在记录存在之前发出的 DNS 查询会被本机自己的解析器缓存为 NXDOMAIN，并在它所错误否认的记录之后仍然存续——这会让扫码的浏览器彻底连不上。若连接器在这段窗口内退出，启动会报告该情况并继续在回环上提供服务。
+
+该 URL 的行为由三点决定：
+
+- **URL 就是凭据。** 它携带本进程的启动令牌，该令牌按进程铸造且从不持久化，因此任何持有该 URL 的人都能在进程退出前驱动会话。请谨慎分享，并把打印出的二维码视作同一份密钥。
+- **它随进程失效。** 隧道（以及公网主机名）属于本次调用；Cloudflare 快速隧道每次启动都会分配新的随机主机名，因此上一次运行的 URL 无法接入新的进程。
+- **GUI 仍然只绑定回环。** 连接器拨号 `127.0.0.1`，因此公网名称只作为单个权威被 `/api` 栅栏接纳，其他所有非回环 Host 仍被拒绝。`--remote` 因此不需要 `--host 0.0.0.0`，后者依旧被拒绝，因为它会刻意暴露原始端口。
+
+连接器必须已安装（`brew install cloudflared`，或 `PATH` 中任意 `cloudflared`；`--cloudflared <path>` 可指定明确的路径）。如果它缺失或连接失败，运行会在 stderr 上说明原因，并继续以回环方式服务，而不是拒绝启动。
+
 ### 通过 SSH 运行
 
-通过 SSH 启动 `dsh --profile web` 时，URL 行仍会打印，但不会为你打开浏览器：本地转发地址由 SSH 客户端或编辑器持有。请在自己的机器上打开转发后的 URL；打印出的 URL 指向远端宿主机 loopback 端点。
+通过 SSH 启动 `dsh --profile web` 时，URL 行仍会打印，但不会为你打开浏览器：本地转发地址由 SSH 客户端或编辑器持有。请在自己的机器上打开转发后的 URL；打印出的 URL 指向远端宿主机 loopback 端点。在 SSH 场景下，`--remote` 正是让无法使用该转发的设备访问 GUI 的方式。
 
 ### 按会话的 agent 设置
 
@@ -87,13 +108,16 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、LAN 信任采样、提示词段落、bash 变量、URL 行、浏览器交接 |
-| [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--trusted-host`、`--no-open`、`--help` |
+| [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、LAN 信任采样、提示词段落、bash 变量、URL 行、浏览器交接、远程隧道 |
+| [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--trusted-host`、`--no-open`、`--remote`、`--no-qr`、`--cloudflared`、`--help` |
+| [`src/remote-access.ts`](src/remote-access.ts) | Cloudflare 快速隧道连接器与终端二维码渲染 |
 | [`cordis.patch.yml`](cordis.patch.yml) | Web patch：重述的基础值、Web 宿主行、浏览器名录、preset 之后的 agent 层 |
 | [`src/invariant.ts`](src/invariant.ts) | 不变式伴生插件：无运行时不变式；每项贡献都由 registry 释放 |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist 解析、fallback 席位、提示词段落、就绪宣告 |
+| [`tests/web-app-remote.spec.ts`](tests/web-app-remote.spec.ts) | 远程发布、栅栏准入与隧道失败处理 |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | 在真实 Loader 树上的命令行解析 |
 | [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN 信任采样 |
+| [`tests/remote-access.spec.ts`](tests/remote-access.spec.ts) | 隧道连接器生命周期、源捕获与失败路径 |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | 页面可达后的默认浏览器交接 |
 
 ### 不变式归属
@@ -146,7 +170,11 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 - **只能观察到交接的启动**——GUI 只报告浏览器被请求打开，而不是它确实打开了；之后的浏览器退出永远不会上报，打印的 URL 是你的手动回退路径。
 - **SSH 会话保留 URL 但跳过浏览器交接**——打印的 URL 指向远端宿主机 loopback 端点；SSH 客户端或编辑器必须暴露并打开本地转发地址。
 - **`BROWSER` 覆盖只能来自环境**——被发现的 `.env` 不能设置 `BROWSER`；只有继承值能为自动交接选择可执行文件。
-- **不支持绑定所有网络接口**——出于安全考虑，`--host 0.0.0.0` 会在启动时被拒绝；请使用默认 loopback 主机。
+- **不支持绑定所有网络接口**——出于安全考虑，`--host 0.0.0.0` 会在启动时被拒绝；请使用默认 loopback 主机，或用 `--remote` 发布一个经 TLS 终结的公网 URL。
+- **远程 URL 是持有者凭据**——它携带进程启动令牌，因此任何持有它的人都能在进程退出前驱动会话。它不是按设备发放的凭据，GUI 也无法在不结束本次运行的情况下撤销某个 URL。
+- **快速隧道在边缘是公开且未经认证的**——Cloudflare 的快速隧道主机名随机且短命，但守护会话的只有 URL 中的令牌；需要更强控制的部署应使用自带认证的隧道或反向代理挡住回环监听，并用 `--trusted-host` 声明该主机名。
+- **快速隧道每次启动都分配新主机名**——一次运行得到的 URL 与二维码无法接入下一次运行的隧道。
+- **隧道的可用性取决于连接器**——`cloudflared` 退出，或网络封锁隧道，都会使公网 URL 失效，而回环 GUI 仍在服务。
 
 <a id="dev-note"></a>
 ### 开发备注

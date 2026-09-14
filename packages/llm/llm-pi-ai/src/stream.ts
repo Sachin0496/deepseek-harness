@@ -18,7 +18,10 @@ import { toPiReplayState } from './replay.ts'
  * Map pi-ai usage (reasoning folded into output by pi-ai).
  * @param usage - cumulative usage from the terminal pi-ai event.
  * @returns harness counts with pi-ai's exact total; cache fields appear only
- *   when non-zero (pi-ai reports zeros, not absence).
+ *   when non-zero (pi-ai reports zeros, not absence). The reasoning breakdown
+ *   is forwarded whenever the provider reports it: the turn-usage disclosure
+ *   shows thinking tokens only when this field is present, and pi-ai sets it
+ *   to a number (possibly 0) exactly for providers that expose the split.
  */
 export function mapUsage(usage: PiUsage): TokenUsage {
   return {
@@ -27,6 +30,7 @@ export function mapUsage(usage: PiUsage): TokenUsage {
     totalTokens: usage.totalTokens,
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
     ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
+    ...usage.reasoning !== undefined ? { reasoningTokens: usage.reasoning } : {},
   }
 }
 

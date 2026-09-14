@@ -27,6 +27,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { FIRST_PARTY_SECTION_ORDER } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-shell-env'
+import { renderTerminalQr, startQuickTunnel, type QuickTunnel } from './remote-access.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -56,6 +57,12 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Publish the loopback GUI through a public Cloudflare quick tunnel. */
+  remote: boolean
+  /** Connector executable `--remote` runs. */
+  cloudflared: string
+  /** Print a QR code for the public remote URL. */
+  printQr: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -63,6 +70,9 @@ export const Config: z<Config> = z.object({
   printUrl: z.boolean().default(true),
   surfaceContext: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  remote: z.boolean().default(false),
+  cloudflared: z.string().default('cloudflared'),
+  printQr: z.boolean().default(true),
 })
 
 /** Bind-dependent Web values shared by the trust fence and URL display. */
@@ -139,6 +149,45 @@ export function resolveLanTrust(bindHost: string, extra: readonly string[]): Web
       .map(iface => iface.address)
     : []
   return { lanAddresses, trustedHosts: [...lanAddresses, ...extra] }
+}
+
+/**
+ * Publish the active loopback listener through a public quick tunnel and admit
+ * the assigned hostname to the /api Host fence.
+ *
+ * A quick tunnel receives its public hostname from Cloudflare only after it
+ * connects, so the authority is registered here rather than composed from
+ * config. The registration lives with the tunnel: closing it withdraws the
+ * authority that the URL depended on.
+ * @param ctx - plugin context owning the tunnel lifetime.
+ * @param target - loopback origin the tunnel publishes.
+ * @param executable - cloudflared executable name or path.
+ * @returns the tunnel, or undefined when it could not start.
+ */
+async function startRemote(
+  ctx: Context,
+  target: string,
+  executable: string,
+): Promise<QuickTunnel | undefined> {
+  try {
+    const tunnel = await startQuickTunnel({
+      target,
+      executable,
+      onExit: (code) => {
+        console.error(`web-app: the remote tunnel exited with code ${String(code)}; its public URL is no longer reachable`)
+      },
+    })
+    ctx.effect(
+      () => () => tunnel.close(),
+      'web-app: remote tunnel',
+    )
+    ctx.connection.addTrustedAuthority(tunnel.authority)
+    return tunnel
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.error(`web-app: ${reason}; continuing without remote access`)
+    return undefined
+  }
 }
 
 /** Model-visible orientation and acceptance boundary for sessions created through `dsh web`. */
@@ -259,15 +308,18 @@ export function apply(ctx: Context, config: Config): void {
       })
     })
   }
-  if (config.printUrl || handoffBrowser) {
+  if (config.printUrl || handoffBrowser || config.remote) {
     ctx.inject(['connection'], (connectionCtx) => {
       // The URL line and browser handoff are readiness signals: supervisors RPC
       // as soon as they observe the line, while a browser requests the page as
       // soon as it opens. Neither may run while sibling rows such as the /api
       // route owner are still mounting. Await Loader settlement first; a
       // hand-built tree without a Loader is already the complete tree.
-      const announceReady = (): void => {
+      const announceReady = async (): Promise<void> => {
         if (ANNOUNCED_ROOTS.has(connectionCtx.root)) return
+        // Claim the announcement before awaiting the tunnel: a second
+        // readiness signal must not publish a second tunnel.
+        ANNOUNCED_ROOTS.add(connectionCtx.root)
         const webUrl = localWebUrl(connectionCtx)
         const authenticatedUrl = connectionCtx.connection.authenticatedUrl(webUrl)
         // Reuse the exact LAN snapshot provided to the /api trust fence.
@@ -276,7 +328,6 @@ export function apply(ctx: Context, config: Config): void {
         const lanUrl = lanCandidate === undefined
           ? undefined
           : connectionCtx.connection.authenticatedUrl(`http://${lanCandidate}:${String(port)}`)
-        ANNOUNCED_ROOTS.add(connectionCtx.root)
         if (config.printUrl) {
           console.log(`dsh web: ${authenticatedUrl}${lanUrl === undefined ? '' : ` (LAN: ${lanUrl})`}`)
         }
@@ -287,12 +338,26 @@ export function apply(ctx: Context, config: Config): void {
             console.error(`web-app: could not open the default browser because ${reason}; use the dsh web URL printed at startup`)
           })
         }
+        if (config.remote) {
+          const target = `http://${LOOPBACK_HOST}:${String(port)}`
+          console.log('dsh web: publishing through a Cloudflare quick tunnel; this takes a few seconds')
+          const tunnel = await startRemote(connectionCtx, target, config.cloudflared)
+          if (tunnel !== undefined) {
+            const publicUrl = connectionCtx.connection.authenticatedUrl(tunnel.origin)
+            console.log(`dsh web: remote ${publicUrl}`)
+            console.log('dsh web: that URL is the credential for this session; anyone holding it can drive it')
+            if (config.printQr) {
+              console.log(renderTerminalQr(publicUrl))
+              console.log('dsh web: scan to open this session on another device')
+            }
+          }
+        }
       }
       // This row's own activation can precede a sibling failure. The app owns
       // readiness by waiting for its Loader tree, or announces at once in a
       // hand-built tree without Loader.
       const settled = connectionCtx.get('loader')?.await()
-      if (settled === undefined) announceReady()
+      if (settled === undefined) void announceReady()
       else {
         void settled.then(() => {
           // The tree can be disposed while the boot was in flight (early
@@ -300,7 +365,7 @@ export function apply(ctx: Context, config: Config): void {
           // mislead, and reading torn-down services would turn a clean shutdown
           // into a crash.
           if (connectionCtx.get('webServer') !== undefined
-            && connectionCtx.get('connection') !== undefined) announceReady()
+            && connectionCtx.get('connection') !== undefined) void announceReady()
         // Loader reports a failed boot; this row only stays quiet.
         }, () => {})
       }

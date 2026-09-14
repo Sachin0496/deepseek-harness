@@ -59,6 +59,9 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     '    openBrowser: !!js ctx.webStartup.openBrowser',
     '    port: !!js ctx.webStartup.port ?? 3080',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
+    '    remote: !!js ctx.webStartup.remote',
+    '    cloudflared: !!js ctx.webStartup.cloudflared',
+    '    printQr: !!js ctx.webStartup.printQr',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -100,6 +103,9 @@ describe('web command-line provider', () => {
       openBrowser: false,
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
+      remote: false,
+      cloudflared: 'cloudflared',
+      printQr: true,
     })
     expect(observed.readerConfig).toEqual(values)
     expect(observed.exits).toEqual([])
@@ -107,12 +113,36 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ openBrowser: true, trustedHosts: [] })
+    expect(values).toEqual({
+      openBrowser: true,
+      trustedHosts: [],
+      remote: false,
+      cloudflared: 'cloudflared',
+      printQr: true,
+    })
     expect(observed.readerConfig).toEqual({
       host: '127.0.0.1',
       openBrowser: true,
       port: 3080,
       trustedHosts: [],
+      remote: false,
+      cloudflared: 'cloudflared',
+      printQr: true,
+    })
+  })
+
+  it('publishes the remote flags and the connector path', async () => {
+    const { values } = await bootProvider([
+      '--remote',
+      '--no-qr',
+      '--cloudflared', '/opt/homebrew/bin/cloudflared',
+    ])
+    expect(values).toEqual({
+      openBrowser: true,
+      trustedHosts: [],
+      remote: true,
+      cloudflared: '/opt/homebrew/bin/cloudflared',
+      printQr: false,
     })
   })
 
@@ -121,6 +151,8 @@ describe('web command-line provider', () => {
     expect(observed.out).toContain('dsh --profile web')
     expect(observed.out).toContain('--no-open')
     expect(observed.out).toContain('--trusted-host')
+    expect(observed.out).toContain('--remote')
+    expect(observed.out).toContain('--cloudflared')
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([0])

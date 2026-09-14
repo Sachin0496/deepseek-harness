@@ -88,6 +88,14 @@ export interface JobHooks {
    * job has one consuming cursor.
    */
   readOutput?(): string
+  /**
+   * Observe recent output without consuming the read cursor. Unlike
+   * {@link readOutput}, consecutive calls may overlap, repeat, or return the
+   * same text; the registry projects it into {@link JobSnapshot.outputTail}
+   * for observation-only consumers. Absence means the producer offers no
+   * non-consuming observation.
+   */
+  peekOutput?(): string
 }
 
 /**
@@ -113,6 +121,12 @@ export interface JobSnapshot {
   status: JobStatus
   /** Kind-specific status detail, present once the producer supplied one (usually terminal). */
   detail?: string
+  /**
+   * Bounded tail of the producer's most recent output, when the producer
+   * supplies a non-consuming peek. Observation-only: it never substitutes for
+   * {@link JobRead}, and consuming reads remain the sole delivery path.
+   */
+  outputTail?: string
   /** Epoch ms when the job was registered. */
   startedAt: number
   /** Epoch ms when the job settled; absent while `running`/`stopping`. */

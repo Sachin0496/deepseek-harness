@@ -193,6 +193,12 @@ interface ShellProcess {
    */
   readOutput(): ShellProcessRead
   /**
+   * Observe recent output without consuming the read cursor, formatted like
+   * {@link readOutput}'s delta; absence marks an executor without a
+   * non-consuming tail. Consecutive calls may overlap or repeat.
+   */
+  peekOutput?(): string
+  /**
    * Kill the process group. Returns false when it had already finished
    * (no-op); idempotent.
    */

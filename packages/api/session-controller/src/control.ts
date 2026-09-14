@@ -213,6 +213,7 @@ function jobView(job: JobSnapshot): SessionJob {
     label: job.label,
     status: job.status,
     ...(job.detail === undefined ? {} : { detail: job.detail }),
+    ...(job.outputTail === undefined ? {} : { outputTail: job.outputTail }),
     startedAt: job.startedAt,
     ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
   }

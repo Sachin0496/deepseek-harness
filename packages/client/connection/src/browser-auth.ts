@@ -117,9 +117,22 @@ function cookieValue(headerValue: string, name: string): string | undefined {
   return undefined
 }
 
-/** Serialize the fixed browser-session attributes; generated names and values are cookie-safe base64url. */
+/**
+ * Serialize the fixed browser-session attributes; generated names and values
+ * are cookie-safe base64url.
+ *
+ * `SameSite=Lax` rather than `Strict`: the token URL is opened from outside the
+ * browser — a QR code scanned by a phone, or a link pasted into another app —
+ * so the navigation that receives the minting response starts cross-site. A
+ * browser stores a `Strict` cookie from that response but withholds it from the
+ * same-origin `303` follow to clean `/`, which leaves the index request
+ * unauthenticated. `Lax` sends the cookie on a top-level `GET`, which is the
+ * redirect this exchange is built from. It still withholds the cookie from
+ * cross-site subresource requests and unsafe methods, and every `/api` request
+ * additionally passes the Host and Origin fence.
+ */
 function sessionCookie(name: string, value: string, expiresAt: number, maxAgeSeconds: number): string {
-  return `${name}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=Strict`
+  return `${name}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=Lax`
 }
 
 function signature(secret: Buffer, body: string): Buffer {

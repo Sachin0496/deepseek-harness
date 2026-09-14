@@ -38,7 +38,7 @@ After startup you see a `dsh web:` line whose root URL carries a fresh process t
 
 ### Configuration
 
-Most users never set these; the command-line flags feed the four settings below — `--host`, `--port`, and `--trusted-host` come from the invocation, and `--no-open` turns the browser handoff off for that invocation:
+Most users never set these; the command-line flags feed the settings below — `--host`, `--port`, `--trusted-host`, `--remote`, `--cloudflared`, and `--no-qr` come from the invocation, and `--no-open` turns the browser handoff off for that invocation:
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -46,6 +46,9 @@ Most users never set these; the command-line flags feed the four settings below 
 | `printUrl` | `true` | Print the `dsh web:` URL line at startup |
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
+| `remote` | `false` | Publish the loopback GUI through a Cloudflare quick tunnel |
+| `cloudflared` | `cloudflared` | Connector executable `remote` runs |
+| `printQr` | `true` | Print a QR code for the public remote URL |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -53,9 +56,27 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 By default the GUI accepts connections from this machine only. A deployment that binds all network interfaces also allows browsers from the LAN, and the printed URL then includes a LAN address; `--trusted-host` adds extra hosts in either case. Host and Origin checks control reachability, while the token exchange authenticates every Host API method and WebSocket stream. The LAN addresses are sampled once at startup, so a network change later is not picked up — restart the GUI to re-advertise.
 
+### Reaching the GUI from another network
+
+`--remote` publishes the loopback listener through a Cloudflare quick tunnel, so a phone on cellular data can reach the session without the GUI binding a public interface and without opening a port. After the tunnel connects, the startup output adds a `dsh web: remote https://<assigned-host>/?token=...` line and, unless `--no-qr` turns it off, a QR code encoding that URL. Scanning the code opens the session with the token exchange already satisfied.
+
+```sh
+dsh --profile web --remote
+```
+
+Both of those lines appear only after a short grace period following the connector publishing the hostname, not the instant it prints it. Cloudflare creates the edge record for a fresh quick-tunnel hostname a few seconds later, and a QR code shown in that window scans into a browser DNS failure (`DNS address could not be found`) instead of the session. The wait is deliberately a timer rather than a reachability check: `trycloudflare.com` serves a 1800-second negative TTL, so a DNS lookup issued before the record exists is cached as NXDOMAIN by this machine's own resolver and then outlives the record it wrongly denies — which breaks the tunnel for the browser that scans the code. If the connector dies during that window, startup reports it and keeps serving on loopback.
+
+Three properties govern how that URL behaves:
+
+- **The URL is the credential.** It carries this process's launch token, which is minted fresh per process and never persisted, so anyone holding the URL can drive the session until the process exits. Share it deliberately, and treat the QR code it prints as the same secret.
+- **It expires with the process.** The tunnel (and the public hostname) belongs to this invocation; Cloudflare quick tunnels assign a new random hostname on every start, so the URL from a previous run never resumes the new one.
+- **The GUI still binds loopback.** The connector dials `127.0.0.1`, so the public name is admitted to the `/api` fence as a single authority and every other non-loopback Host is still refused. `--remote` therefore does not need `--host 0.0.0.0`, which remains refused as a deliberate exposure of the raw port.
+
+The connector must be installed (`brew install cloudflared`, or any `cloudflared` on `PATH`; `--cloudflared <path>` names an explicit one). If it is missing or fails to connect, the run reports why on stderr and keeps serving on loopback rather than refusing to start.
+
 ### Running over SSH
 
-When you launch `dsh --profile web` over SSH, the URL line still prints but the browser is not opened for you: the SSH client or editor owns the local forwarding address. Open the forwarded URL on your machine yourself; the printed URL names the remote host's loopback endpoint.
+When you launch `dsh --profile web` over SSH, the URL line still prints but the browser is not opened for you: the SSH client or editor owns the local forwarding address. Open the forwarded URL on your machine yourself; the printed URL names the remote host's loopback endpoint. Over SSH, `--remote` is the way to reach the GUI from a device that cannot use that forwarding.
 
 ### Per-session agent setup
 
@@ -87,13 +108,16 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff |
-| [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--help` |
+| [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff, remote tunnel |
+| [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--remote`, `--no-qr`, `--cloudflared`, `--help` |
+| [`src/remote-access.ts`](src/remote-access.ts) | The Cloudflare quick-tunnel connector and the terminal QR renderer |
 | [`cordis.patch.yml`](cordis.patch.yml) | The web patch: restated base values, web host rows, browser roster, agent plane behind presets |
 | [`src/invariant.ts`](src/invariant.ts) | Invariant companion: no runtime invariant; every contribution is registry-disposed |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | Dist resolution, fallback seat, prompt sections, readiness |
+| [`tests/web-app-remote.spec.ts`](tests/web-app-remote.spec.ts) | Remote publication, fence admission, and tunnel-failure handling |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | Command-line parsing over a real Loader tree |
 | [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN-trust sampling |
+| [`tests/remote-access.spec.ts`](tests/remote-access.spec.ts) | Tunnel connector lifecycle, origin capture, and failure paths |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | Default-browser handoff after the page is reachable |
 
 ### Invariant ownership
@@ -146,7 +170,11 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **Only the handoff start is observable** — the GUI reports that the browser was asked to open, not that it actually opened; a later browser exit is never reported, and the printed URL is your manual fallback.
 - **SSH sessions keep the URL but skip the browser handoff** — the printed URL names the remote host's loopback endpoint; the SSH client or editor must expose and open the local forwarded address.
 - **`BROWSER` overrides only come from the environment** — a discovered `.env` cannot set `BROWSER`; only an inherited value can choose the executable for the automatic handoff.
-- **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
+- **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host, or `--remote` to publish a TLS-terminated public URL.
+- **A remote URL is a bearer credential** — it carries the process launch token, so anyone holding it can drive the session until the process exits. It is not a per-device credential, and the GUI cannot revoke one URL without ending the run.
+- **A quick tunnel is public and unauthenticated at the edge** — Cloudflare's quick-tunnel hostname is random and short-lived, but the only thing guarding the session is the token in the URL; a deployment needing stronger control should front the loopback listener with its own authenticated tunnel or reverse proxy and declare that hostname with `--trusted-host`.
+- **A quick tunnel hands out a new hostname per start** — the URL and QR code from one run do not reach the next run's tunnel.
+- **The tunnel is only as available as the connector** — a `cloudflared` that exits, or a network that blocks the tunnel, drops the public URL while the loopback GUI keeps serving.
 
 <a id="dev-note"></a>
 ### Dev Note

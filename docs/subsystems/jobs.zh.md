@@ -57,7 +57,7 @@ interface JobStart {
 }
 ```
 
-`JobHooks.done` 会在生产方释放其资源后 resolve，而不是仅在工作完成时 resolve。可选的 `readOutput` 用来区分会消费输出的流式任务和仅有最终输出的任务。
+`JobHooks.done` 会在生产方释放其资源后 resolve，而不是仅在工作完成时 resolve。可选的 `readOutput` 用来区分会消费输出的流式任务和仅有最终输出的任务。可选的 `peekOutput` 额外提供对最近输出的非消费式观察；连续 peek 可能重叠或重复，且 peek 永远不会推进消费式游标。
 
 ```ts type-equiv
 /** Hooks through which the runtime controls and observes producer work. */
@@ -80,6 +80,14 @@ interface JobHooks {
    * job has one consuming cursor.
    */
   readOutput?(): string
+  /**
+   * Observe recent output without consuming the read cursor. Unlike
+   * {@link readOutput}, consecutive calls may overlap, repeat, or return the
+   * same text; the registry projects it into {@link JobSnapshot.outputTail}
+   * for observation-only consumers. Absence means the producer offers no
+   * non-consuming observation.
+   */
+  peekOutput?(): string
 }
 ```
 
@@ -123,6 +131,12 @@ interface JobSnapshot {
   status: JobStatus
   /** Kind-specific status detail, present once the producer supplied one (usually terminal). */
   detail?: string
+  /**
+   * Bounded tail of the producer's most recent output, when the producer
+   * supplies a non-consuming peek. Observation-only: it never substitutes for
+   * {@link JobRead}, and consuming reads remain the sole delivery path.
+   */
+  outputTail?: string
   /** Epoch ms when the job was registered. */
   startedAt: number
   /** Epoch ms when the job settled; absent while `running`/`stopping`. */
@@ -154,7 +168,7 @@ interface JobRead {
 
 ## 服务行为
 
-抽象的 [`JobRegistry`](../../packages/jobs/jobs/src/index.ts) Service Definition 规定原子 `start`、限定调用方作用域的 `get` 和 `list`、`read`、`kill`、有界 `wait`、故障隔离的 `onJobDone` 与 `onJobsChanged` 监听器，以及 `attachController`；[`LocalJobRegistry`](../../packages/jobs/jobs-local/src/index.ts) 是其进程局部 Service Provider。授权会比较拥有者会话；拥有者清理与准入会使用确切的已注册 `Agent` 实例。本地 Service Provider 的 `maxConcurrentJobsPerOwner` 配置必须是正的安全整数，默认值为 `10`；它按确切 owner 统计 `running` 与 `stopping` 记录，所有无 owner 任务共享一个服务级桶，并在生产方终止结算后释放容量。Service Definition 约定见 [`dsh-jobs`](../../packages/jobs/jobs/README.zh.md)，注册表生命周期与准入策略见 [`dsh-jobs-local`](../../packages/jobs/jobs-local/README.zh.md)，面向模型的 Consumer 见 [`dsh-tool-jobs`](../../packages/jobs/tool-jobs/README.zh.md)。
+抽象的 [`JobRegistry`](../../packages/jobs/jobs/src/index.ts) Service Definition 规定原子 `start`、限定调用方作用域的 `get` 和 `list`、`read`、`kill`、有界 `wait`、故障隔离的 `onJobDone` 与 `onJobsChanged` 监听器，以及 `attachController`；[`LocalJobRegistry`](../../packages/jobs/jobs-local/src/index.ts) 是其进程局部 Service Provider。授权会比较拥有者会话；拥有者清理与准入会使用确切的已注册 `Agent` 实例。本地 Service Provider 的 `maxConcurrentJobsPerOwner` 配置必须是正的安全整数，默认值为 `10`；它按确切 owner 统计 `running` 与 `stopping` 记录，所有无 owner 任务共享一个服务级桶，并在生产方终止结算后释放容量。对于生产方提供非消费式 peek 的任务，该 Provider 会把有界的 `outputTail` 投影进快照（安全钳制 `outputTailMaxChars`，默认 `2048`；为 `0` 时禁用投影），并在活跃任务的尾部发生变化时重新广播 `onJobsChanged`，轮询间隔为 `tailBroadcastMs`（默认 `2000`；为 `0` 时禁用轮询）——peek 读取永远不会消费 owner 自己的输出游标。Service Definition 约定见 [`dsh-jobs`](../../packages/jobs/jobs/README.zh.md)，注册表生命周期与准入策略见 [`dsh-jobs-local`](../../packages/jobs/jobs-local/README.zh.md)，面向模型的 Consumer 见 [`dsh-tool-jobs`](../../packages/jobs/tool-jobs/README.zh.md)。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

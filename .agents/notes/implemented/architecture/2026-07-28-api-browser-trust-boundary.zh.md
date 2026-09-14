@@ -17,6 +17,8 @@ Web GUI 宿主以纯 loopback HTTP 提供 `/api`（默认 `127.0.0.1:3080`；CLI
 
 可达性由 webserver 的绑定配置（`host: 127.0.0.1 | 0.0.0.0`）控制，这道栅栏是混淆代理人防御，而不是身份。Connection 在栅栏之后应用独立的[浏览器令牌认证](2026-08-24-browser-token-authentication.zh.md)。栅栏不检查对端 socket 地址：绑定表达可达性，`trustedHosts` 点名接受的 authority，socket 地址提供不了 Host/Origin 校验需要的额外信息。
 
+只在运行时才得知某个 authority 的调用方，用 `HostConnectionService.addTrustedAuthority(authority)` 扩展栅栏，并拿到用于撤销的 disposer。新增条目会经过 `assertTrustedAuthority`——与配置边界相同的校验——因此畸形值会在调用处抛错，而不是悄悄授权它本会解析出的 hostname；新增权威随后面对完全相同的 Host/Origin 与浏览器会话规则。运行时集合之所以存在，是因为 [Web GUI 的远程访问](../feature/2026-09-11-web-gui-remote-access.zh.md)通过 Cloudflare 快速隧道发布回环监听，而隧道的公网主机名在连接时才被分配，因此无法出现在组合配置中。
+
 ## 曾考虑的替代方案
 
 - **按 RPC 设防（延续现状）。** 否决：守卫清单永远追着方法清单跑，价值最高的方法本来就没被守住，而 browse RPC 上的回环规则会破坏它们为之存在的远程部署。

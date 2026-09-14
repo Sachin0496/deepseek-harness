@@ -481,6 +481,12 @@ export interface SessionJob {
   readonly label: string
   readonly status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
   readonly detail?: string
+  /**
+   * Bounded non-consuming tail of the job's most recent output, when the
+   * producer supplies one. Observation-only; consumers never read job output
+   * through this row, so owner-facing consuming reads stay intact.
+   */
+  readonly outputTail?: string
   readonly startedAt: number
   readonly finishedAt?: number
 }
