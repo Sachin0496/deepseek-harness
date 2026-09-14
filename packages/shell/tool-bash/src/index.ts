@@ -372,6 +372,7 @@ export function apply(ctx: Context, config: Config = {}): void {
               cancel: () => void proc.kill(),
               done: proc.done.then(() => processOutcome(proc)),
               readOutput: () => renderProcessRead(proc.readOutput(), proc.sandbox, escalationModes),
+              ...proc.peekOutput === undefined ? {} : { peekOutput: proc.peekOutput.bind(proc) },
             }
           },
         })

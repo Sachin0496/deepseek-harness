@@ -378,6 +378,8 @@ export interface Config {
   maxOutputBytes?: number
   /** Per-stream spill-file cap; larger streams retain only their in-memory tail. */
   maxSpillBytes?: number
+  /** Non-consuming {@link ShellProcess.peekOutput} tail capacity, in characters. */
+  outputTailChars?: number
   /** Grace period for kill escalation and inherited pipes; at most `MAX_TIMER_DELAY_MS`. */
   graceMs?: number
 }
@@ -954,10 +956,21 @@ export interface Config {
    * omission defaults to 10.
    */
   maxConcurrentJobsPerOwner?: number
+  /**
+   * Safety clamp, in characters, for {@link JobSnapshot.outputTail}; omission
+   * defaults to 2048. Zero disables tail projection entirely.
+   */
+  outputTailMaxChars?: number
+  /**
+   * Poll interval for re-broadcasting live jobs whose non-consuming tail
+   * changed, in milliseconds; omission defaults to 2000. Zero disables the
+   * poll, so tails refresh only when another lifecycle change fires.
+   */
+  tailBroadcastMs?: number
 }
 ```
 
-来源：[`packages/jobs/jobs-local/src/index.ts:31`](../packages/jobs/jobs-local/src/index.ts)
+来源：[`packages/jobs/jobs-local/src/index.ts:37`](../packages/jobs/jobs-local/src/index.ts)
 
 <a id="deepseek-aidsh-llm-deepseek"></a>
 
@@ -3244,10 +3257,16 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Publish the loopback GUI through a public Cloudflare quick tunnel. */
+  remote: boolean
+  /** Connector executable `--remote` runs. */
+  cloudflared: string
+  /** Print a QR code for the public remote URL. */
+  printQr: boolean
 }
 ```
 
-来源：[`packages/bundle/web-app/src/index.ts:45`](../packages/bundle/web-app/src/index.ts)
+来源：[`packages/bundle/web-app/src/index.ts:46`](../packages/bundle/web-app/src/index.ts)
 
 <a id="deepseek-aidsh-web-fetch-http"></a>
 
@@ -3300,6 +3319,22 @@ export interface Config {
 ```
 
 来源：[`packages/web/web-search-deepseek/src/index.ts:46`](../packages/web/web-search-deepseek/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-duckduckgo"></a>
+
+## `@deepseek-ai/dsh-web-search-duckduckgo`
+
+需要：`web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Endpoint base; `/html/` is appended. Defaults to the public HTML endpoint. */
+  baseURL?: string
+}
+```
+
+来源：[`packages/web/web-search-duckduckgo/src/index.ts:32`](../packages/web/web-search-duckduckgo/src/index.ts)
 
 <a id="deepseek-aidsh-web-search-exa"></a>
 

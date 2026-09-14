@@ -170,6 +170,25 @@ describe('LocalBashExecutor.start (background process handles)', () => {
     expect(proc.exitCode).toBe(0)
   })
 
+  it('peekOutput observes the tail without consuming readOutput cursors', async () => {
+    const { bash } = await setup()
+    const proc = bash.start(bash.resolve({ command: 'echo one; echo two; echo three' }))
+    await proc.done
+    const peek = proc.peekOutput?.bind(proc)
+    if (peek === undefined) throw new Error('expected peekOutput on the bash process handle')
+    const first = peek()
+    expect(first).toContain('one')
+    expect(first).toContain('two')
+    expect(first).toContain('three')
+    // Non-consuming: a second peek repeats the same tail.
+    expect(peek()).toBe(first)
+    // The consuming cursor is untouched: the first read still delivers everything.
+    const read = proc.readOutput()
+    expect(read.delta).toContain('one')
+    expect(read.delta).toContain('two')
+    expect(read.delta).toContain('three')
+  })
+
   it('threads stdin and extra env into a background process', async () => {
     const { bash } = await setup()
     const proc = bash.start(bash.resolve({

@@ -80,6 +80,62 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* Expandable rows stack the toggle line above the output tail. */
+.rowExpandable {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.rowMain {
+  cursor: pointer;
+}
+
+button.rowMain:hover {
+  background: var(--dsw-alias-fill-l2);
+}
+
+.chevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.tail {
+  box-sizing: border-box;
+  max-height: 220px;
+  margin: 0 8px 6px;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-l2);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--dsw-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: pre;
+}
+
 .rowDot {
   flex: none;
 }

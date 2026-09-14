@@ -57,7 +57,7 @@ interface JobStart {
 }
 ```
 
-`JobHooks.done` resolves after the producer releases its resources, not merely when work finishes. Optional `readOutput` distinguishes consuming stream jobs from final-output-only jobs.
+`JobHooks.done` resolves after the producer releases its resources, not merely when work finishes. Optional `readOutput` distinguishes consuming stream jobs from final-output-only jobs. Optional `peekOutput` additionally offers a non-consuming observation of recent output; consecutive peeks may overlap or repeat, and peeking never advances the consuming cursor.
 
 ```ts type-equiv
 /** Hooks through which the runtime controls and observes producer work. */
@@ -80,6 +80,14 @@ interface JobHooks {
    * job has one consuming cursor.
    */
   readOutput?(): string
+  /**
+   * Observe recent output without consuming the read cursor. Unlike
+   * {@link readOutput}, consecutive calls may overlap, repeat, or return the
+   * same text; the registry projects it into {@link JobSnapshot.outputTail}
+   * for observation-only consumers. Absence means the producer offers no
+   * non-consuming observation.
+   */
+  peekOutput?(): string
 }
 ```
 
@@ -123,6 +131,12 @@ interface JobSnapshot {
   status: JobStatus
   /** Kind-specific status detail, present once the producer supplied one (usually terminal). */
   detail?: string
+  /**
+   * Bounded tail of the producer's most recent output, when the producer
+   * supplies a non-consuming peek. Observation-only: it never substitutes for
+   * {@link JobRead}, and consuming reads remain the sole delivery path.
+   */
+  outputTail?: string
   /** Epoch ms when the job was registered. */
   startedAt: number
   /** Epoch ms when the job settled; absent while `running`/`stopping`. */
@@ -154,7 +168,7 @@ interface JobRead {
 
 ## Service behavior
 
-The abstract [`JobRegistry`](../../packages/jobs/jobs/src/index.ts) Service Definition specifies atomic `start`, caller-scoped `get` and `list`, `read`, `kill`, bounded `wait`, failure-isolated `onJobDone` and `onJobsChanged` listeners, and `attachController`; [`LocalJobRegistry`](../../packages/jobs/jobs-local/src/index.ts) is the process-local Service Provider. Authorization compares owner sessions; owner cleanup and admission use the exact registered `Agent` instance. The local provider's positive-safe-integer `maxConcurrentJobsPerOwner` config defaults to `10` and counts `running` plus `stopping` records per exact owner, with one shared bucket for unowned jobs; terminal producer settlement releases capacity. See [`dsh-jobs`](../../packages/jobs/jobs/README.md) for the Service Definition contract, [`dsh-jobs-local`](../../packages/jobs/jobs-local/README.md) for the registry lifecycle and admission policy, and [`dsh-tool-jobs`](../../packages/jobs/tool-jobs/README.md) for the model-facing Consumer.
+The abstract [`JobRegistry`](../../packages/jobs/jobs/src/index.ts) Service Definition specifies atomic `start`, caller-scoped `get` and `list`, `read`, `kill`, bounded `wait`, failure-isolated `onJobDone` and `onJobsChanged` listeners, and `attachController`; [`LocalJobRegistry`](../../packages/jobs/jobs-local/src/index.ts) is the process-local Service Provider. Authorization compares owner sessions; owner cleanup and admission use the exact registered `Agent` instance. The local provider's positive-safe-integer `maxConcurrentJobsPerOwner` config defaults to `10` and counts `running` plus `stopping` records per exact owner, with one shared bucket for unowned jobs; terminal producer settlement releases capacity. For jobs whose producer offers a non-consuming peek, the provider projects a bounded `outputTail` into snapshots (safety clamp `outputTailMaxChars`, default `2048`; zero disables projection) and re-broadcasts `onJobsChanged` when a live job's tail changed, polled at `tailBroadcastMs` (default `2000`; zero disables the poll) — peek reads never consume the owner's own output cursor. See [`dsh-jobs`](../../packages/jobs/jobs/README.md) for the Service Definition contract, [`dsh-jobs-local`](../../packages/jobs/jobs-local/README.md) for the registry lifecycle and admission policy, and [`dsh-tool-jobs`](../../packages/jobs/tool-jobs/README.md) for the model-facing Consumer.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

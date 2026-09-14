@@ -49,6 +49,8 @@ export interface Config {
   maxOutputBytes?: number
   /** Per-stream spill-file cap; larger streams retain only their in-memory tail. */
   maxSpillBytes?: number
+  /** Non-consuming {@link ShellProcess.peekOutput} tail capacity, in characters. */
+  outputTailChars?: number
   /** Grace period for kill escalation and inherited pipes; at most `MAX_TIMER_DELAY_MS`. */
   graceMs?: number
 }
@@ -86,6 +88,7 @@ export function assertServiceableBashConfig(config: Config): void {
   assertPositiveFinite('maxTimeoutMs', resolved.maxTimeoutMs)
   assertPositiveFinite('maxOutputBytes', resolved.maxOutputBytes)
   assertPositiveFinite('maxSpillBytes', resolved.maxSpillBytes)
+  assertPositiveFinite('outputTailChars', resolved.outputTailChars)
   assertPositiveFinite('graceMs', resolved.graceMs)
   if (resolved.graceMs > MAX_TIMER_DELAY_MS) {
     throw new Error(`bash-local: graceMs must be no greater than ${MAX_TIMER_DELAY_MS}`)
@@ -108,6 +111,7 @@ export class LocalBashExecutor extends ShellExecutor {
     maxTimeoutMs: z.number().default(600_000),
     maxOutputBytes: z.number().default(64_000),
     maxSpillBytes: z.number().default(DEFAULT_MAX_SPILL_BYTES),
+    outputTailChars: z.number().default(4_096),
     graceMs: z.number().default(DEFAULT_GRACE_MS),
   })
 
@@ -268,6 +272,16 @@ export class LocalBashExecutor extends ShellExecutor {
 
     let stdoutOffset = 0
     let stderrOffset = 0
+    // Non-consuming tail: separate cursors advance only here, so peeking
+    // never disturbs the consuming readOutput offsets above.
+    let peekStdoutOffset = 0
+    let peekStderrOffset = 0
+    let tail = ''
+    const outputTailChars = this.config.outputTailChars
+    const appendTail = (delta: string): void => {
+      if (delta.length === 0) return
+      tail = tail.length + delta.length <= outputTailChars ? tail + delta : (tail + delta).slice(-outputTailChars)
+    }
     const proc: ShellProcess = {
       status: 'running',
       exitCode: null,
@@ -306,6 +320,17 @@ export class LocalBashExecutor extends ShellExecutor {
           ...out.spillPath !== undefined ? { stdoutSpillPath: out.spillPath } : {},
           ...err.spillPath !== undefined ? { stderrSpillPath: err.spillPath } : {},
         }
+      },
+      peekOutput: (): string => {
+        const out = collected.stdout.readFrom(peekStdoutOffset)
+        const err = collected.stderr.readFrom(peekStderrOffset)
+        peekStdoutOffset = out.nextOffset
+        peekStderrOffset = err.nextOffset
+        // Same section format as readOutput's delta, so the tail reads like
+        // the stream the owner consumes.
+        const separator = out.text.length > 0 && !out.text.endsWith('\n') ? '\n' : ''
+        appendTail(out.text + (err.text.length > 0 ? `${separator}[stderr]\n${err.text}` : ''))
+        return tail
       },
       kill: (): boolean => {
         if (proc.status !== 'running') return false

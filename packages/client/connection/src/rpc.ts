@@ -206,6 +206,17 @@ export interface HostConnectionHandle {
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
 
   /**
+   * Extend the Host fence with one authority whose name is unknowable at boot,
+   * such as the hostname a tunnel receives when it connects. The fence accepts
+   * the same authority forms as the static `trustedHosts` config and validates
+   * an added entry identically, so a malformed value throws here rather than
+   * silently widening the grant at request time.
+   * @param authority - bare `host` or `host:port` authority to accept.
+   * @returns the disposer withdrawing the authority.
+   */
+  addTrustedAuthority(authority: string): () => void
+
+  /**
    * Authenticate one frontend index request, owning a token redirect or 401.
    * @param request - root or configured-index HTTP request.
    * @param response - response owned when the result is false.

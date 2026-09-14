@@ -238,6 +238,40 @@ describe('connection node half', () => {
     await dispose()
   })
 
+  it('admits a runtime authority a tunnel only learns after it connects, and withdraws it', async () => {
+    const { connection, dispose } = await mounted()
+    const tunnelHost = 'brave-river.trycloudflare.com'
+    const request = () => fakeRequest({
+      host: tunnelHost,
+      cookie: browserCookie(connection, tunnelHost),
+    })
+
+    // An authority nobody declared is refused by the Host fence, not merely
+    // unauthenticated: a rebinding page must never reach this state.
+    expect(connection.requestRejection(request())).toBe(403)
+
+    const withdraw = connection.addTrustedAuthority(tunnelHost)
+    expect(connection.requestRejection(fakeRequest({ host: tunnelHost }))).toBe(401)
+    expect(connection.requestRejection(request())).toBeUndefined()
+
+    withdraw()
+    expect(connection.requestRejection(request())).toBe(403)
+    await dispose()
+  })
+
+  it('validates an added authority the same way as a configured one', async () => {
+    const { connection, dispose } = await mounted()
+    // A path, a userinfo prefix, and a zero-padded port would each silently
+    // widen the grant if they were accepted verbatim.
+    for (const malformed of ['harness.example/path', 'user@harness.example', 'harness.example:080']) {
+      expect(() => connection.addTrustedAuthority(malformed)).toThrow(
+        `client-connection: trustedHosts entry ${JSON.stringify(malformed)} is not a bare host[:port] authority`,
+      )
+    }
+    expect(connection.requestRejection(fakeRequest({ host: 'harness.example' }))).toBe(403)
+    await dispose()
+  })
+
   it('provides a disposable dedicated RPC channel', async () => {
     const ctx = new Context()
     const routes: WebRoute[] = []

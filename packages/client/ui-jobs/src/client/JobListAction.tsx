@@ -95,8 +95,18 @@ export function JobListAction({ sessionId, useSessions, t }: JobListActionProps)
   const jobs = useSessions(state => state.jobsBySession[sessionId]) ?? NO_TASKS
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const [expandedId, setExpandedId] = useState<JobView['id'] | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const tailRef = useRef<HTMLPreElement>(null)
+
+  // Pin the expanded tail to its newest output; runs per render so a streaming
+  // tail keeps scrolling without extra state.
+  useEffect(() => {
+    if (expandedId === null) return
+    const pre = tailRef.current
+    if (pre !== null) pre.scrollTop = pre.scrollHeight
+  })
 
   const rows = useMemo(() => ordered(jobs), [jobs])
   const liveCount = useMemo(() => jobs.filter(isLive).length, [jobs])
@@ -160,8 +170,10 @@ export function JobListAction({ sessionId, useSessions, t }: JobListActionProps)
               const elapsed = live ? now - job.startedAt : (job.finishedAt ?? job.startedAt) - job.startedAt
               const duration = formatDuration(elapsed, t)
               const status = statusLabel(job.status, t)
-              return (
-                <li key={job.id} className={live ? css.row : `${css.row} ${css.rowSettled}`}>
+              const expandable = job.outputTail !== undefined
+              const expanded = expandable && expandedId === job.id
+              const rowMain = (
+                <>
                   <StateDot state={dotState(job.status)} className={css.rowDot} />
                   <span className={css.kind}>{job.kind}</span>
                   <span className={css.label} title={job.label}>{job.label}</span>
@@ -172,6 +184,33 @@ export function JobListAction({ sessionId, useSessions, t }: JobListActionProps)
                   >
                     {duration}
                   </span>
+                  {expandable
+                    ? <IconChevronDownOutline14 className={expanded ? css.chevronOpen : css.chevron} />
+                    : null}
+                </>
+              )
+              return (
+                <li
+                  key={job.id}
+                  className={`${live ? css.row : `${css.row} ${css.rowSettled}`}${expandable ? ` ${css.rowExpandable}` : ''}`}
+                >
+                  {expandable ? (
+                    <button
+                      type="button"
+                      className={css.rowMain}
+                      aria-expanded={expanded}
+                      aria-label={expanded ? t('row.collapse') : t('row.expand')}
+                      title={expanded ? t('row.collapse') : t('row.expand')}
+                      onClick={() => { setExpandedId(current => current === job.id ? null : job.id) }}
+                    >
+                      {rowMain}
+                    </button>
+                  ) : (
+                    <div className={css.rowMain}>{rowMain}</div>
+                  )}
+                  {expanded ? (
+                    <pre ref={tailRef} className={css.tail} aria-label={t('tail.aria')}>{job.outputTail}</pre>
+                  ) : null}
                 </li>
               )
             })}

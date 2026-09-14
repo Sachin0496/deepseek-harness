@@ -1109,6 +1109,72 @@ describe('LocalJobRegistry teardown change notifications', () => {
     void id
   })
 
+  it('projects a clamped outputTail from the producer peek into snapshot views', async () => {
+    const ctx = await harness({ outputTailMaxChars: 10 })
+    const task = producer({ kind: 'workflow', peekOutput: () => '0123456789abcdef' })
+    const id = ctx.jobs.start(task.spec)
+    expect(ctx.jobs.get(id).outputTail).toBe('6789abcdef')
+    expect(ctx.jobs.list().find(job => job.id === id)?.outputTail).toBe('6789abcdef')
+    task.settle({ status: 'completed' })
+    await tick()
+  })
+
+  it('peeks fresh on every snapshot, so late output shows up without a poll', async () => {
+    const ctx = await harness({ tailBroadcastMs: 0 })
+    let tail = 'first'
+    const task = producer({ kind: 'workflow', peekOutput: () => tail })
+    const id = ctx.jobs.start(task.spec)
+    expect(ctx.jobs.get(id).outputTail).toBe('first')
+    tail = 'second'
+    expect(ctx.jobs.get(id).outputTail).toBe('second')
+    task.settle({ status: 'completed' })
+    await tick()
+  })
+
+  it('leaves outputTail undefined for producers without a peek and when projection is disabled', async () => {
+    const ctx = await harness({ outputTailMaxChars: 0 })
+    const peeking = producer({ kind: 'workflow', peekOutput: () => 'hidden' })
+    const peekId = ctx.jobs.start(peeking.spec)
+    expect(ctx.jobs.get(peekId).outputTail).toBeUndefined()
+    const silent = producer({ kind: 'workflow' })
+    const silentId = ctx.jobs.start(silent.spec)
+    expect(ctx.jobs.get(silentId).outputTail).toBeUndefined()
+    peeking.settle({ status: 'completed' })
+    silent.settle({ status: 'completed' })
+    await tick()
+  })
+
+  it('re-broadcasts onJobsChanged only when a live tail changed, then goes idle after settlement', async () => {
+    vi.useFakeTimers()
+    try {
+      const ctx = await harness({ tailBroadcastMs: 100 })
+      let tail = 'a'
+      const task = producer({ kind: 'workflow', peekOutput: () => tail })
+      ctx.jobs.start(task.spec)
+      const listener = vi.fn()
+      ctx.jobs.onJobsChanged(listener)
+      // The first poll stores the initial tail and announces the change.
+      await vi.advanceTimersByTimeAsync(150)
+      expect(listener).toHaveBeenCalled()
+      listener.mockClear()
+      // An unchanged tail stays silent.
+      await vi.advanceTimersByTimeAsync(150)
+      expect(listener).not.toHaveBeenCalled()
+      // A changed tail re-broadcasts exactly once per poll.
+      tail = 'b'
+      await vi.advanceTimersByTimeAsync(150)
+      expect(listener).toHaveBeenCalledTimes(1)
+      // Settlement announces through the lifecycle path, then the poll goes idle.
+      task.settle({ status: 'completed' })
+      await vi.advanceTimersByTimeAsync(0)
+      listener.mockClear()
+      await vi.advanceTimersByTimeAsync(400)
+      expect(listener).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('announces the emptied set to a listener registered outside this service (reload safety)', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)

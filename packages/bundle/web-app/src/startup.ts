@@ -29,13 +29,23 @@ export interface WebStartupValues {
   port?: number
   /** Explicit `--trusted-host` authorities, in argument order. */
   trustedHosts: string[]
+  /** Whether this invocation publishes the GUI through a public quick tunnel. */
+  remote: boolean
+  /** `--cloudflared`, the connector executable to run. */
+  cloudflared: string
+  /** Whether a public remote URL prints a scannable QR code. */
+  printQr: boolean
 }
 
 /** The web flag family, as commander parsed it. */
 interface WebOptions {
+  cloudflared: string
   host?: string
   open: boolean
   port?: string
+  qr: boolean
+  /** Absent unless `--remote` was passed: commander leaves a boolean flag undefined. */
+  remote?: boolean
   trustedHost?: string[]
 }
 
@@ -52,12 +62,19 @@ function webCommand(): Command {
     .option('--no-open', 'do not open the Web UI in the default browser')
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
     .option('--trusted-host <authority...>', 'extra authority the /api browser-trust fence accepts (host or host:port; repeatable)')
+    .option('--remote', 'publish this GUI through a public Cloudflare quick tunnel so another network can reach it')
+    .option('--no-qr', 'do not print a QR code for the public remote URL')
+    .option('--cloudflared <path>', 'cloudflared executable to run for --remote', 'cloudflared')
     .addHelpText('after', `
 Examples:
   dsh --profile web                          serve on the composed host and port
   dsh --profile web --no-open                serve without opening a browser
   dsh --profile web --port 8080              serve on another port
-`)
+  dsh --profile web --remote                 serve on loopback and publish a public HTTPS URL
+                                             with a QR code, for a phone on any network
+
+The --remote URL carries this process's launch token, so anyone holding it can
+drive the session. It stops working when this process exits.`)
 }
 
 /**
@@ -82,6 +99,10 @@ export function apply(ctx: Context): void {
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
+      // commander leaves a plain boolean flag undefined when it is absent.
+      remote: options.remote ?? false,
+      cloudflared: options.cloudflared,
+      printQr: options.qr,
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

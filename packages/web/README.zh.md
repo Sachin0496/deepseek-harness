@@ -9,7 +9,7 @@ kind: "package-group"
 
 ## 概述
 
-`web/` 组为 harness 提供 web 访问能力——搜索 web 与抓取 URL——通过一个与提供方无关的服务（`ctx.web`）以及使用它的后端和工具。部署可以挂载一个或多个后端——搜索用 Exa、Perplexity 或 DeepSeek，抓取用匿名 HTTP(S)——服务按操作挑选可用的提供方，因此后端来来去去，面向模型的工具保持稳定。六个包构成该家族：负责提供方选择与错误的 `web/` 服务、三个搜索后端、一个抓取后端，以及向模型公开 `web_search` 与 `web_fetch` 的 `tool-web/`。该组只拥有 web 访问本身：没有浏览或提取，没有逐 URL 策略，各后端保留自己的资源上限。搜索与抓取有意共用一项服务，使选择、取消、错误与配置只有一个归属方。
+`web/` 组为 harness 提供 web 访问能力——搜索 web 与抓取 URL——通过一个与提供方无关的服务（`ctx.web`）以及使用它的后端和工具。部署可以挂载一个或多个后端——搜索用 DuckDuckGo（无需密钥）、Exa、Perplexity 或 DeepSeek，抓取用匿名 HTTP(S)——服务按操作挑选可用的提供方，因此后端来来去去，面向模型的工具保持稳定。七个包构成该家族：负责提供方选择与错误的 `web/` 服务、四个搜索后端、一个抓取后端，以及向模型公开 `web_search` 与 `web_fetch` 的 `tool-web/`。该组只拥有 web 访问本身：没有浏览或提取，没有逐 URL 策略，各后端保留自己的资源上限。搜索与抓取有意共用一项服务，使选择、取消、错误与配置只有一个归属方。
 
 ## 目录
 
@@ -22,11 +22,12 @@ kind: "package-group"
 <a id="packages"></a>
 ## 包
 
-六个包分别承担 web 角色；子系统参考文档拥有穷尽式词汇与约定。
+七个包分别承担 web 角色；子系统参考文档拥有穷尽式词汇与约定。
 
 | 包 | 职责 | ctx 键 |
 |---|---|---|
 | [`web/`](web/README.zh.md) | 搜索/抓取服务：通过可互换的后端搜索与抓取 URL，统一选择与错误策略 | `ctx.web` |
+| [`web-search-duckduckgo/`](web-search-duckduckgo/README.zh.md) | 通过 DuckDuckGo 搜索 web，无需 API 密钥 | 注册到 `ctx.web` |
 | [`web-search-exa/`](web-search-exa/README.zh.md) | 通过 Exa 搜索 web | 注册到 `ctx.web` |
 | [`web-search-perplexity/`](web-search-perplexity/README.zh.md) | 通过 Perplexity 搜索 web | 注册到 `ctx.web` |
 | [`web-search-deepseek/`](web-search-deepseek/README.zh.md) | 通过 DeepSeek 原生搜索搜索 web | 注册到 `ctx.web` |
